@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Input overlay</title>
+    <link rel="stylesheet" href="style.css?v=7" />
+  </head>
+  <body>
+    <div class="wrap" id="wrap"></div>
+
+    <button class="gear" id="gear" title="Edit layout">Edit</button>
+
+    <div class="side" id="side">
+      <div class="tbar">
+        <button id="btnAddKey" title="Add a key cell">+ keys</button>
+        <button id="btnAddImg" title="Add an image cell">+ image</button>
+        <button id="btnResetAll" title="Zero every counter">reset counts</button>
+        <label class="snap"><input type="checkbox" id="chkSnap" checked />snap</label>
+        <button id="btnDone" title="Exit the layout editor">Done</button>
+      </div>
+      <div class="insp" id="insp"></div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script src="app.js?v=7"></script>
+  </body>
+</html>
