@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,39 +52,72 @@ type Cell struct {
 	Scale       float64  `json:"scale,omitempty"`
 }
 
+type Overlay struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Size  Size   `json:"size"`
+	Cells []Cell `json:"cells"`
+}
+
 type Config struct {
-	Version int    `json:"version"`
-	Size    Size   `json:"size"`
-	Cells   []Cell `json:"cells"`
+	Version  int       `json:"version"`
+	Active   int       `json:"active"`
+	Overlays []Overlay `json:"overlays"`
 }
 
 const defaultConfigJSON = `{
-  "version": 1,
-  "size": { "w": 510, "h": 206 },
-  "cells": [
-    { "id": "dash", "kind": "key", "label": "Dash",  "keys": ["KEY_H"], "showCounter": true, "x": 14,  "y": 14,  "w": 90, "h": 72 },
-    { "id": "jump", "kind": "key", "label": "Jump",  "keys": ["KEY_J"], "showCounter": true, "x": 112, "y": 14,  "w": 90, "h": 72 },
-    { "id": "up",   "kind": "key", "label": "↑",     "keys": ["KEY_W", "KEY_UP"], "showCounter": true, "x": 210, "y": 14, "w": 90, "h": 72 },
-    { "id": "demo", "kind": "key", "label": "Demo",  "keys": ["KEY_Y"], "showCounter": true, "x": 308, "y": 14,  "w": 90, "h": 72 },
-    { "id": "grab", "kind": "key", "label": "Grab",  "keys": ["KEY_LEFTSHIFT", "KEY_RIGHTSHIFT"], "showCounter": true, "x": 14,  "y": 94, "w": 90, "h": 72 },
-    { "id": "left", "kind": "key", "label": "←",     "keys": ["KEY_A", "KEY_LEFT"], "showCounter": true, "x": 112, "y": 94, "w": 90, "h": 72 },
-    { "id": "down", "kind": "key", "label": "↓",     "keys": ["KEY_S", "KEY_DOWN"], "showCounter": true, "x": 210, "y": 94, "w": 90, "h": 72 },
-    { "id": "right","kind": "key", "label": "→",     "keys": ["KEY_D", "KEY_RIGHT"], "showCounter": true, "x": 308, "y": 94, "w": 90, "h": 72 },
-    { "id": "jump2","kind": "key", "label": "Jump2", "keys": ["KEY_K"], "showCounter": true, "x": 406, "y": 94, "w": 90, "h": 72 },
-    { "id": "madeline", "kind": "image", "image": "madeline_like_hihi.png", "showCounter": false, "x": 406, "y": 14, "w": 90, "h": 72 }
+  "version": 2,
+  "active": 0,
+  "overlays": [
+    {
+      "id": "celeste",
+      "name": "Celeste",
+      "size": { "w": 510, "h": 206 },
+      "cells": [
+        { "id": "dash", "kind": "key", "label": "Dash",  "keys": ["KEY_H"], "showCounter": true, "x": 14,  "y": 14,  "w": 90, "h": 72 },
+        { "id": "jump", "kind": "key", "label": "Jump",  "keys": ["KEY_J"], "showCounter": true, "x": 112, "y": 14,  "w": 90, "h": 72 },
+        { "id": "up",   "kind": "key", "label": "↑",     "keys": ["KEY_W", "KEY_UP"], "showCounter": true, "x": 210, "y": 14, "w": 90, "h": 72 },
+        { "id": "demo", "kind": "key", "label": "Demo",  "keys": ["KEY_Y"], "showCounter": true, "x": 308, "y": 14,  "w": 90, "h": 72 },
+        { "id": "grab", "kind": "key", "label": "Grab",  "keys": ["KEY_LEFTSHIFT", "KEY_RIGHTSHIFT"], "showCounter": true, "x": 14,  "y": 94, "w": 90, "h": 72 },
+        { "id": "left", "kind": "key", "label": "←",     "keys": ["KEY_A", "KEY_LEFT"], "showCounter": true, "x": 112, "y": 94, "w": 90, "h": 72 },
+        { "id": "down", "kind": "key", "label": "↓",     "keys": ["KEY_S", "KEY_DOWN"], "showCounter": true, "x": 210, "y": 94, "w": 90, "h": 72 },
+        { "id": "right","kind": "key", "label": "→",     "keys": ["KEY_D", "KEY_RIGHT"], "showCounter": true, "x": 308, "y": 94, "w": 90, "h": 72 },
+        { "id": "jump2","kind": "key", "label": "Jump2", "keys": ["KEY_K"], "showCounter": true, "x": 406, "y": 94, "w": 90, "h": 72 },
+        { "id": "madeline", "kind": "image", "image": "media/madeline_like_hihi.png", "showCounter": false, "x": 406, "y": 14, "w": 90, "h": 72 }
+      ]
+    }
   ]
 }`
 
+type captureTarget struct {
+	Ov   string
+	Cell string
+}
+
 var (
-	sm           sync.Mutex
-	cfgNow       Config
-	watched      map[uint32]bool
-	pressed      map[uint32]bool
-	counts       map[string]int64
-	captureCell  string
-	countsDirty  atomic.Bool
-	cfgDirty     atomic.Bool
+	sm            sync.Mutex
+	cfgNow        Config
+	watched       map[uint32]bool
+	pressed       map[uint32]bool
+	counts        map[string]int64
+	capture       captureTarget
+	countsDirty   atomic.Bool
+	cfgDirty      atomic.Bool
 )
+
+func countKey(ovID, cellID string) string {
+	return ovID + ":" + cellID
+}
+
+func activeIdx() int {
+	if len(cfgNow.Overlays) == 0 {
+		return 0
+	}
+	if cfgNow.Active < 0 || cfgNow.Active >= len(cfgNow.Overlays) {
+		return 0
+	}
+	return cfgNow.Active
+}
 
 func configPath() string {
 	if p := os.Getenv("CELESTE_OVERLAY_CONFIG"); p != "" {
@@ -159,14 +193,17 @@ func cellHasNative(cell *Cell, code uint32) bool {
 
 func rebuildWatched() {
 	w := map[uint32]bool{}
-	for i := range cfgNow.Cells {
-		cell := &cfgNow.Cells[i]
-		if cell.Kind != "key" {
-			continue
-		}
-		for _, k := range cell.Keys {
-			if c, ok := resolveNative(k); ok {
-				w[c] = true
+	for oi := range cfgNow.Overlays {
+		ov := &cfgNow.Overlays[oi]
+		for ci := range ov.Cells {
+			cell := &ov.Cells[ci]
+			if cell.Kind != "key" {
+				continue
+			}
+			for _, k := range cell.Keys {
+				if c, ok := resolveNative(k); ok {
+					w[c] = true
+				}
 			}
 		}
 	}
@@ -178,20 +215,14 @@ func rebuildWatched() {
 	}
 }
 
-func normalizeConfig(c Config) (Config, error) {
-	if c.Size.W <= 0 {
-		c.Size.W = 510
-	}
-	if c.Size.H <= 0 {
-		c.Size.H = 206
-	}
-	if len(c.Cells) > 200 {
-		c.Cells = c.Cells[:200]
+func normalizeCells(cells []Cell) ([]Cell, error) {
+	if len(cells) > 200 {
+		cells = cells[:200]
 	}
 	seen := map[string]bool{}
 	var out []Cell
-	for i := range c.Cells {
-		cell := c.Cells[i]
+	for i := range cells {
+		cell := cells[i]
 		switch cell.Kind {
 		case "image":
 		default:
@@ -213,7 +244,7 @@ func normalizeConfig(c Config) (Config, error) {
 			cell.Keys = nil
 			cell.Image = strings.TrimSpace(cell.Image)
 			if len(cell.Image) > 500 {
-				return c, fmt.Errorf("image path too long")
+				return nil, fmt.Errorf("image path too long")
 			}
 		}
 		cell.Label = strings.TrimSpace(cell.Label)
@@ -252,9 +283,59 @@ func normalizeConfig(c Config) (Config, error) {
 		seen[cell.ID] = true
 		out = append(out, cell)
 	}
-	c.Cells = out
+	return out, nil
+}
+
+func normalizeConfig(c Config) (Config, error) {
+	if len(c.Overlays) == 0 {
+		return c, fmt.Errorf("no overlays in config")
+	}
+	if len(c.Overlays) > 50 {
+		c.Overlays = c.Overlays[:50]
+	}
+	if c.Active < 0 {
+		c.Active = 0
+	}
+	if c.Active >= len(c.Overlays) {
+		c.Active = len(c.Overlays) - 1
+	}
+	seenOv := map[string]bool{}
+	for i := range c.Overlays {
+		ov := &c.Overlays[i]
+		ov.ID = strings.TrimSpace(ov.ID)
+		if ov.ID == "" {
+			if i == 0 {
+				ov.ID = "celeste"
+			} else {
+				ov.ID = fmt.Sprintf("ov-%d", i+1)
+			}
+		}
+		base := ov.ID
+		for n := 1; seenOv[ov.ID]; n++ {
+			ov.ID = fmt.Sprintf("%s-%d", base[:minInt(len(base), 24)], n)
+		}
+		seenOv[ov.ID] = true
+		if strings.TrimSpace(ov.Name) == "" {
+			ov.Name = fmt.Sprintf("Overlay %d", i+1)
+		}
+		ov.Name = strings.TrimSpace(ov.Name)
+		if len(ov.Name) > 64 {
+			ov.Name = ov.Name[:64]
+		}
+		if ov.Size.W <= 0 {
+			ov.Size.W = 510
+		}
+		if ov.Size.H <= 0 {
+			ov.Size.H = 206
+		}
+		nc, err := normalizeCells(ov.Cells)
+		if err != nil {
+			return c, err
+		}
+		ov.Cells = nc
+	}
 	if c.Version == 0 {
-		c.Version = 1
+		c.Version = 2
 	}
 	return c, nil
 }
@@ -285,15 +366,26 @@ func saveCountsFile() error {
 
 func loadCounts() {
 	var cf struct {
-		Version int            `json:"version"`
+		Version int              `json:"version"`
 		Counts  map[string]int64 `json:"counts"`
 	}
 	if err := readJSON(countsPath(), &cf); err != nil {
 		return
 	}
+	prefix := ""
+	if len(cfgNow.Overlays) > 0 {
+		prefix = cfgNow.Overlays[0].ID + ":"
+	}
 	sm.Lock()
 	for id, n := range cf.Counts {
-		counts[id] = n
+		if n == 0 {
+			continue
+		}
+		if strings.Contains(id, ":") {
+			counts[id] = n
+		} else if prefix != "" {
+			counts[prefix+id] = n
+		}
 	}
 	sm.Unlock()
 }
@@ -306,10 +398,38 @@ func defaultConfig() (Config, error) {
 	return normalizeConfig(c)
 }
 
+// migrateLegacyConfig converts an old single-layout config (top-level
+// "size"/"cells") into the new multi-overlay format with one Celeste overlay.
+func migrateLegacyConfig() (Config, error) {
+	var l struct {
+		Size  Size   `json:"size"`
+		Cells []Cell `json:"cells"`
+	}
+	if err := readJSON(configPath(), &l); err != nil {
+		return Config{}, err
+	}
+	if l.Cells == nil && l.Size.W == 0 && l.Size.H == 0 {
+		return Config{}, fmt.Errorf("no legacy layout found")
+	}
+	return Config{
+		Version: 2,
+		Active:  0,
+		Overlays: []Overlay{
+			{ID: "celeste", Name: "Celeste", Size: l.Size, Cells: l.Cells},
+		},
+	}, nil
+}
+
 func loadConfig() {
-	if err := readJSON(configPath(), &cfgNow); err == nil {
-		nc, err := normalizeConfig(cfgNow)
-		if err == nil {
+	var c Config
+	if err := readJSON(configPath(), &c); err == nil && len(c.Overlays) > 0 {
+		if nc, err := normalizeConfig(c); err == nil {
+			cfgNow = nc
+			return
+		}
+	}
+	if migrated, err := migrateLegacyConfig(); err == nil {
+		if nc, err := normalizeConfig(migrated); err == nil {
 			cfgNow = nc
 			return
 		}
@@ -348,7 +468,7 @@ func onKey(code uint32, down bool) {
 		}
 	}
 	captured := false
-	var capCell, capName string
+	var capCell, capOv, capName string
 	sm.Lock()
 	if pressed[code] == down {
 		sm.Unlock()
@@ -356,32 +476,43 @@ func onKey(code uint32, down bool) {
 	}
 	pressed[code] = down
 	if down {
-		if name, ok := nativeName(code); ok && captureCell != "" {
+		if name, ok := nativeName(code); ok && capture.Cell != "" {
 			if name == "KEY_ESC" {
-				captureCell = ""
+				capture = captureTarget{}
 			} else {
 				captured = true
-				capCell = captureCell
+				capCell = capture.Cell
+				capOv = capture.Ov
 				capName = name
-				captureCell = ""
-				for i := range cfgNow.Cells {
-					if cfgNow.Cells[i].ID == capCell {
-						if !hasKey(&cfgNow.Cells[i], capName) {
-							appendKey(&cfgNow.Cells[i], capName)
-							cfgDirty.Store(true)
-							rebuildWatched()
-						}
-						break
+				capture = captureTarget{}
+				for oi := range cfgNow.Overlays {
+					ov := &cfgNow.Overlays[oi]
+					if ov.ID != capOv {
+						continue
 					}
+					for ci := range ov.Cells {
+						if ov.Cells[ci].ID == capCell {
+							if !hasKey(&ov.Cells[ci], capName) {
+								appendKey(&ov.Cells[ci], capName)
+								cfgDirty.Store(true)
+							}
+							break
+						}
+					}
+					break
 				}
+				rebuildWatched()
 			}
 		}
 		if !captured {
-			for i := range cfgNow.Cells {
-				cell := &cfgNow.Cells[i]
-				if cell.ShowCounter && cellHasNative(cell, code) {
-					counts[cell.ID]++
-					countsDirty.Store(true)
+			for oi := range cfgNow.Overlays {
+				ov := &cfgNow.Overlays[oi]
+				for ci := range ov.Cells {
+					cell := &ov.Cells[ci]
+					if cell.ShowCounter && cellHasNative(cell, code) {
+						counts[countKey(ov.ID, cell.ID)]++
+						countsDirty.Store(true)
+					}
 				}
 			}
 		}
@@ -404,15 +535,14 @@ func applyCfg(c Config) {
 	sm.Lock()
 	cfgNow = nc
 	rebuildWatched()
-	for id := range counts {
-		keep := false
-		for _, cell := range nc.Cells {
-			if cell.ID == id {
-				keep = true
-				break
-			}
+	keep := map[string]bool{}
+	for oi := range nc.Overlays {
+		for _, cell := range nc.Overlays[oi].Cells {
+			keep[countKey(nc.Overlays[oi].ID, cell.ID)] = true
 		}
-		if !keep {
+	}
+	for id := range counts {
+		if !keep[id] {
 			delete(counts, id)
 			countsDirty.Store(true)
 		}
@@ -424,40 +554,50 @@ func applyCfg(c Config) {
 	signalChanged()
 }
 
-func snapshotPair() ([]bool, []int64) {
+func snapshots() map[string]any {
 	sm.Lock()
 	defer sm.Unlock()
-	p := make([]bool, len(cfgNow.Cells))
-	c := make([]int64, len(cfgNow.Cells))
-	for i := range cfgNow.Cells {
-		cell := &cfgNow.Cells[i]
-		if cell.Kind == "key" {
-			for _, k := range cell.Keys {
-				if code, ok := resolveNative(k); ok && pressed[code] {
-					p[i] = true
+	p := map[string][]bool{}
+	c := map[string][]int64{}
+	for oi := range cfgNow.Overlays {
+		ov := &cfgNow.Overlays[oi]
+		pv := make([]bool, len(ov.Cells))
+		cv := make([]int64, len(ov.Cells))
+		for ci := range ov.Cells {
+			cell := &ov.Cells[ci]
+			if cell.Kind == "key" {
+				for _, k := range cell.Keys {
+					if code, ok := resolveNative(k); ok && pressed[code] {
+						pv[ci] = true
+					}
 				}
 			}
+			cv[ci] = counts[countKey(ov.ID, cell.ID)]
 		}
-		c[i] = counts[cell.ID]
+		p[ov.ID] = pv
+		c[ov.ID] = cv
 	}
-	return p, c
+	return map[string]any{"t": "st", "p": p, "c": c}
 }
 
 func getCfg() Config {
 	sm.Lock()
 	defer sm.Unlock()
 	c := cfgNow
-	c.Cells = make([]Cell, len(cfgNow.Cells))
-	copy(c.Cells, cfgNow.Cells)
-	for i := range c.Cells {
-		c.Cells[i].Keys = append([]string(nil), cfgNow.Cells[i].Keys...)
+	c.Overlays = make([]Overlay, len(cfgNow.Overlays))
+	copy(c.Overlays, cfgNow.Overlays)
+	for i := range c.Overlays {
+		c.Overlays[i].Cells = make([]Cell, len(cfgNow.Overlays[i].Cells))
+		copy(c.Overlays[i].Cells, cfgNow.Overlays[i].Cells)
+		for j := range c.Overlays[i].Cells {
+			c.Overlays[i].Cells[j].Keys = append([]string(nil), cfgNow.Overlays[i].Cells[j].Keys...)
+		}
 	}
 	return c
 }
 
 func snapshotMsg() map[string]any {
-	p, c := snapshotPair()
-	return map[string]any{"t": "st", "p": p, "c": c}
+	return snapshots()
 }
 
 func cfgMsg() map[string]any {
@@ -547,6 +687,7 @@ func roundTripMsg(c *websocket.Conn, data []byte) {
 	var m struct {
 		T    string  `json:"t"`
 		ID   string  `json:"id"`
+		OV   string  `json:"ov"`
 		Cfg  *Config `json:"cfg"`
 		Key  string  `json:"key"`
 		Down *bool   `json:"down"`
@@ -561,18 +702,28 @@ func roundTripMsg(c *websocket.Conn, data []byte) {
 		}
 	case "cap":
 		sm.Lock()
-		captureCell = m.ID
+		capture.Ov = m.OV
+		if capture.Ov == "" && len(cfgNow.Overlays) > 0 {
+			capture.Ov = cfgNow.Overlays[activeIdx()].ID
+		}
+		capture.Cell = m.ID
 		sm.Unlock()
 		sendWS(c, map[string]any{"t": "toast", "m": "listening; press a key (Esc cancels)"})
 	case "capoff":
 		sm.Lock()
-		captureCell = ""
+		capture = captureTarget{}
 		sm.Unlock()
 		sendWS(c, map[string]any{"t": "toast", "m": "capture cancelled"})
 	case "reset":
 		sm.Lock()
 		if id := m.ID; counts != nil {
-			counts[id] = 0
+			ovID := m.OV
+			if ovID == "" && len(cfgNow.Overlays) > 0 {
+				ovID = cfgNow.Overlays[activeIdx()].ID
+			}
+			if ovID != "" {
+				counts[countKey(ovID, id)] = 0
+			}
 		}
 		countsDirty.Store(true)
 		sm.Unlock()
@@ -628,6 +779,27 @@ func noStore(h http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		h.ServeHTTP(w, r)
 	})
+}
+
+func handleMedia(w http.ResponseWriter, r *http.Request) {
+	files := []string{}
+	if base := webDir(); base != "" {
+		entries, err := os.ReadDir(filepath.Join(base, "media"))
+		if err == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				switch strings.ToLower(filepath.Ext(e.Name())) {
+				case ".png", ".jpg", ".jpeg", ".gif":
+					files = append(files, e.Name())
+				}
+			}
+		}
+	}
+	sort.Strings(files)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string][]string{"files": files})
 }
 
 func webDir() string {
@@ -713,6 +885,7 @@ func main() {
 	http.Handle("/", noStore(http.FileServer(mustStatic())))
 	http.HandleFunc(wsPath, handleWS)
 	http.HandleFunc("/api/inject", handleInject)
+	http.HandleFunc("/api/media", handleMedia)
 
 	port := httpPort
 	if p := os.Getenv("CELESTE_OVERLAY_PORT"); p != "" {

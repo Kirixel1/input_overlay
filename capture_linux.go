@@ -56,7 +56,7 @@ func openDevices() ([]int, error) {
 		}
 	}
 	if len(fds) == 0 {
-		return nil, fmt.Errorf("no readable keyboard devices (try: sudo setfacl -m u:$USER:r /dev/input/event*)")
+		return nil, fmt.Errorf("no readable keyboard devices (run once: sudo usermod -aG input $USER, then log back in; or: sudo setfacl -m u:$USER:r /dev/input/event*)")
 	}
 	return fds, nil
 }

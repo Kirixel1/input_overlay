@@ -135,7 +135,8 @@ body {
 }
 
 .tbar button,
-.insp button {
+.insp button,
+.ovbar button {
   background: #2c3950;
   color: #dbe6f5;
   border: 1px solid #42536e;
@@ -147,9 +148,41 @@ body {
 }
 
 .tbar button:hover,
-.insp button:hover {
+.insp button:hover,
+.ovbar button:hover {
   border-color: #78d2ff;
   color: #fff;
+}
+
+.ovbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(24, 30, 40, 0.98);
+  border-bottom: 1px solid #2a3444;
+  align-items: center;
+}
+
+.ovbar select,
+.ovbar input[type="text"] {
+  background: #1b2434;
+  color: #e4e8f0;
+  border: 1px solid #3a4658;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 3px 5px;
+  box-sizing: border-box;
+}
+
+.ovbar select {
+  flex: 1 1 100px;
+}
+
+.ovbar input[type="text"] {
+  flex: 1 1 120px;
+  min-width: 90px;
 }
 
 .snap {
@@ -228,6 +261,97 @@ body {
 
 .insp .sec .f {
   margin-top: 2px;
+}
+
+.insp .colorrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.insp .colorrow input[type="color"] {
+  width: 52px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #3a4658;
+  border-radius: 4px;
+  background: #1b2434;
+  cursor: pointer;
+}
+
+.insp .colorrow button {
+  padding: 2px 9px;
+  border-color: #5a5544;
+  color: #cbbf9f;
+}
+
+.insp .colorrow button:hover {
+  border-color: #d8a84e;
+  color: #ffe08a;
+}
+
+.insp .rowimg {
+  display: flex;
+  gap: 6px;
+}
+
+.insp .rowimg input {
+  flex: 1;
+  min-width: 0;
+}
+
+.insp .browse-btn {
+  white-space: nowrap;
+}
+
+.insp .media-menu {
+  margin-top: 8px;
+  padding: 4px;
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid #303b4e;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 4px;
+}
+
+.insp .media-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid #303b4e;
+  border-radius: 6px;
+  background: #1b2434;
+  cursor: pointer;
+  color: #b7c1d4;
+}
+
+.insp .media-item:hover {
+  border-color: #d8a84e;
+}
+
+.insp .media-item img {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  background: #000;
+  border-radius: 4px;
+}
+
+.insp .media-item span {
+  font-size: 11px;
+  line-height: 1.2;
+  word-break: break-all;
+}
+
+.insp .media-empty {
+  grid-column: 1 / -1;
+  color: #7f89a0;
+  padding: 10px;
 }
 
 .chips {

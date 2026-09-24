@@ -3,7 +3,9 @@ const editing = params.has("edit");
 const noedit = params.has("noedit");
 
 const wrap = document.getElementById("wrap");
+const side = document.getElementById("side");
 const insp = document.getElementById("insp");
+const ovbar = document.getElementById("ovbar");
 const toastEl = document.getElementById("toast");
 const gear = document.getElementById("gear");
 
@@ -40,6 +42,33 @@ const esc = (s) =>
     "'": "&#39;",
   }[c]));
 
+async function fetchMedia() {
+  const r = await fetch("/api/media");
+  const j = await r.json();
+  return (j.files || []).sort();
+}
+
+function ov() {
+  if (!cfg || !Array.isArray(cfg.overlays) || !cfg.overlays.length) return null;
+  const i = Math.min(Math.max(0, cfg.active || 0), cfg.overlays.length - 1);
+  return cfg.overlays[i];
+}
+
+function ovParam() {
+  const p = params.get("ov");
+  if (!p) return null;
+  const found = cfg.overlays.find((o) => o.id === p);
+  if (found) return found;
+  const idx = parseInt(p, 10);
+  if (!isNaN(idx) && idx >= 0 && idx < cfg.overlays.length) return cfg.overlays[idx];
+  return null;
+}
+
+function viewedOverlay() {
+  if (editing) return ov();
+  return ovParam() || ov();
+}
+
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => {
@@ -72,48 +101,83 @@ function onSt(d) {
 }
 
 function applySt() {
-  if (!st || !cells.length) return;
-  st.p.forEach((on, i) => {
-    const c = cells[i];
-    if (c) c.classList.toggle("on", on);
+  const v = viewedOverlay();
+  if (!st || !v || !cells.length) return;
+  const p = st.p[v.id];
+  const c = st.c[v.id];
+  if (!p || !c || p.length !== cells.length) return;
+  p.forEach((on, i) => {
+    const el = cells[i];
+    if (el) el.classList.toggle("on", on);
   });
-  st.c.forEach((n, i) => {
-    const c = cells[i];
-    const cnt = c && c.querySelector(".cnt");
+  c.forEach((n, i) => {
+    const el = cells[i];
+    const cnt = el && el.querySelector(".cnt");
     if (cnt) cnt.textContent = n;
   });
 }
 
-function onCfg(c, mid) {
-  cfg = c;
-  for (const cell of cfg.cells) {
-    if (cell.kind === "key" && !Array.isArray(cell.keys)) cell.keys = [];
-  }
-  render();
-  const force = mid === "captured" || mid === "saved";
-  if (pendingSelect !== null) {
-    const nc = cfg.cells[pendingSelect];
-    if (nc) sel = nc.id;
-    pendingSelect = null;
-    renderInsp();
-  } else if (sel && !cfg.cells.find((x) => x.id === sel)) {
-    sel = null;
-    renderInsp();
-  } else if (editing && (force || !inspContainsFocus())) {
-    renderInsp();
+function ensureKeyArrays() {
+  for (const o of cfg.overlays) {
+    for (const cell of o.cells) {
+      if (cell.kind === "key" && !Array.isArray(cell.keys)) cell.keys = [];
+    }
   }
 }
 
-function inspContainsFocus() {
-  return insp.contains(document.activeElement);
+function editorFocused() {
+  return side.contains(document.activeElement);
+}
+
+function onCfg(c, mid) {
+  cfg = c;
+  ensureKeyArrays();
+  render();
+  const force = mid === "captured" || (mid === "saved" && !editorFocused());
+  if (pendingSelect !== null) {
+    const nc = ov().cells[pendingSelect];
+    if (nc) sel = nc.id;
+    pendingSelect = null;
+    renderSide();
+  } else if (sel && !ov().cells.find((x) => x.id === sel)) {
+    sel = null;
+    renderSide();
+  } else if (editing && (force || !editorFocused())) {
+    renderSide();
+  }
+}
+
+function renderSide() {
+  renderOvBar();
+  renderInsp();
+}
+
+function captureSideFocus() {
+  const el = document.activeElement;
+  if (!el || !side.contains(el)) return null;
+  const f = el.getAttribute("data-f");
+  if (f == null) return null;
+  return { f, sel: el.selectionStart };
+}
+
+function restoreSideFocus(s) {
+  if (!s) return;
+  const el = side.querySelector('[data-f="' + s.f + '"]');
+  if (!el) return;
+  el.focus();
+  if (typeof s.sel === "number" && typeof el.setSelectionRange === "function") {
+    const pos = Math.min(s.sel, (el.value || "").length);
+    el.setSelectionRange(pos, pos);
+  }
 }
 
 function render() {
-  if (!cfg) return;
-  wrap.style.width = cfg.size.w + "px";
-  wrap.style.height = cfg.size.h + "px";
+  const v = viewedOverlay();
+  if (!v) return;
+  wrap.style.width = v.size.w + "px";
+  wrap.style.height = v.size.h + "px";
   wrap.innerHTML = "";
-  cells = cfg.cells.map((cell) => buildCell(cell));
+  cells = v.cells.map((cell) => buildCell(cell));
   for (const el of cells) wrap.appendChild(el);
   applySt();
 }
@@ -249,16 +313,17 @@ function attachResize(el, cell) {
 }
 
 function freeSlot(kind) {
+  const v = ov();
   const w = 90;
   const h = 72;
-  const hmax = (cfg.size && cfg.size.h) || 206;
+  const hmax = (v && v.size.h) || 206;
   for (let r = 0; r < 10; r++) {
     for (let c = 0; c < 9; c++) {
       const x = 14 + c * (w + 8);
       const y = 14 + r * (h + 8);
       if (y + h > hmax + 40) continue;
       let ok = true;
-      for (const o of cfg.cells) {
+      for (const o of v.cells) {
         if (x < o.x + o.w + 8 && x + w + 8 > o.x && y < o.y + o.h + 8 && y + h + 8 > o.y) {
           ok = false;
           break;
@@ -271,7 +336,8 @@ function freeSlot(kind) {
 }
 
 function addCell(kind) {
-  if (!cfg) {
+  const v = ov();
+  if (!v) {
     showToast("no connection to the overlay server");
     return;
   }
@@ -288,17 +354,100 @@ function addCell(kind) {
     h: 72,
   };
   if (kind === "key") cell.keys = [];
-  else cell.image = "madeline_like_hihi.png";
-  cfg.cells.push(cell);
-  pendingSelect = cfg.cells.length - 1;
+  else cell.image = "media/madeline_like_hihi.png";
+  v.cells.push(cell);
+  pendingSelect = v.cells.length - 1;
   send({ t: "cfg", cfg: JSON.parse(JSON.stringify(cfg)) });
 }
 
 function deleteCell(id) {
-  cfg.cells = cfg.cells.filter((c) => c.id !== id);
+  const v = ov();
+  v.cells = v.cells.filter((c) => c.id !== id);
   sel = null;
   send({ t: "cfg", cfg: JSON.parse(JSON.stringify(cfg)) });
   renderInsp();
+}
+
+function switchOverlay(i) {
+  if (!cfg || i < 0 || i >= cfg.overlays.length) return;
+  cfg.active = i;
+  sel = null;
+  pendingSelect = null;
+  saveCfg();
+  renderSide();
+}
+
+function renderOvBar() {
+  if (!editing || !cfg) return;
+  const box = ovbar;
+  box.innerHTML = "";
+  const selOv = document.createElement("select");
+  selOv.dataset.f = "ovsel";
+  cfg.overlays.forEach((o, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = o.name || o.id || "Overlay " + (i + 1);
+    if (i === cfg.active) opt.selected = true;
+    selOv.appendChild(opt);
+  });
+  selOv.addEventListener("change", () => switchOverlay(parseInt(selOv.value, 10)));
+
+  const nameEl = document.createElement("input");
+  nameEl.type = "text";
+  nameEl.dataset.f = "ovname";
+  nameEl.value = ov().name || "";
+  nameEl.placeholder = "overlay name";
+  nameEl.title = "Overlay name";
+  nameEl.addEventListener("input", () => {
+    ov().name = nameEl.value;
+    saveCfgDebounced();
+  });
+  nameEl.addEventListener("keydown", (e) => e.stopPropagation());
+
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "+ overlay";
+  addBtn.title = "Add a new empty overlay";
+  addBtn.addEventListener("click", () => {
+    const name = "Overlay " + (cfg.overlays.length + 1);
+    cfg.overlays.push({ id: "", name: name, size: { w: 510, h: 206 }, cells: [] });
+    switchOverlay(cfg.overlays.length - 1);
+  });
+
+  const copyBtn = document.createElement("button");
+  copyBtn.textContent = "copy";
+  copyBtn.title = "Duplicate the current overlay";
+  copyBtn.addEventListener("click", () => {
+    const src = ov();
+    const cpy = JSON.parse(JSON.stringify(src));
+    cpy.id = "";
+    cpy.name = src.name + " (copy)";
+    for (let i = 0; i < cpy.cells.length; i++) cpy.cells[i].id = cpy.cells[i].id + "-copy-" + (i + 1);
+    cfg.overlays.push(cpy);
+    switchOverlay(cfg.overlays.length - 1);
+  });
+
+  const delBtn = document.createElement("button");
+  delBtn.textContent = "delete";
+  delBtn.title = "Delete the current overlay";
+  delBtn.style.borderColor = "#8f5a5a";
+  delBtn.addEventListener("click", () => {
+    if (cfg.overlays.length <= 1) {
+      showToast("cannot delete the only overlay");
+      return;
+    }
+    cfg.overlays.splice(cfg.active, 1);
+    if (cfg.active >= cfg.overlays.length) cfg.active = cfg.overlays.length - 1;
+    sel = null;
+    pendingSelect = null;
+    saveCfg();
+    renderSide();
+  });
+
+  box.appendChild(selOv);
+  box.appendChild(nameEl);
+  box.appendChild(addBtn);
+  box.appendChild(copyBtn);
+  box.appendChild(delBtn);
 }
 
 function section(title, ...nodes) {
@@ -364,16 +513,20 @@ function selFont(init) {
 
 function renderInsp() {
   if (!cfg) return;
-  const cell = cfg.cells.find((c) => c.id === sel);
+  const v = ov();
+  if (!v) return;
+  const prev = captureSideFocus();
+  const cell = v.cells.find((c) => c.id === sel);
   if (!cell) {
     insp.innerHTML =
-      '<div class="hint">Select a cell to edit it.<br /><br />Drag cells to move them, use the corner handle to resize.<br /><br />Add key cells or image cells with the buttons above.</div>';
+      '<div class="hint">Select a cell to edit it.<br /><br />Drag cells to move them, use the corner handle to resize.<br /><br />Add key cells or image cells with the buttons above.<br /><br />Overlays: pick one from the list above, or add/copy/delete your own (e.g. for Isaac, osu!mania, ...).</div>';
     return;
   }
 
   const box = document.createElement("div");
 
   const nameField = inpText(cell.label, "dash");
+  nameField.dataset.f = "label";
   nameField.addEventListener("input", () => {
     cell.label = nameField.value;
     render();
@@ -382,13 +535,65 @@ function renderInsp() {
   box.appendChild(section("Cell", field("Label", nameField)));
 
   if (cell.kind === "image") {
-    const imgField = inpText(cell.image, "image.png");
+    const imgField = inpText(cell.image, "media/image.png / anim.gif");
+    imgField.dataset.f = "image";
     imgField.addEventListener("input", () => {
       cell.image = imgField.value;
       render();
       saveCfgDebounced();
     });
-    box.appendChild(section("Image", field("File (relative to /web)", imgField)));
+    const browseBtn = document.createElement("button");
+    browseBtn.textContent = "browse";
+    browseBtn.className = "browse-btn";
+    const row = document.createElement("div");
+    row.className = "row rowimg";
+    row.appendChild(imgField);
+    row.appendChild(browseBtn);
+    const menu = document.createElement("div");
+    menu.className = "media-menu";
+    menu.style.display = "none";
+    const showMenu = () => {
+      menu.style.display = "block";
+      menu.textContent = "loading…";
+      fetchMedia()
+        .then((files) => {
+          menu.textContent = "";
+          if (!files.length) {
+            const em = document.createElement("div");
+            em.className = "media-empty";
+            em.textContent = "no png/jpg/gif files in web/";
+            menu.appendChild(em);
+            return;
+          }
+          files.forEach((f) => {
+            const it = document.createElement("button");
+            it.className = "media-item";
+            it.title = f;
+            const th = document.createElement("img");
+            th.src = "/media/" + encodeURI(f);
+            it.appendChild(th);
+            const nm = document.createElement("span");
+            nm.textContent = f;
+            it.appendChild(nm);
+            it.addEventListener("click", () => {
+              cell.image = "media/" + f;
+              imgField.value = cell.image;
+              menu.style.display = "none";
+              saveCfg();
+              render();
+            });
+            menu.appendChild(it);
+          });
+        })
+        .catch(() => {
+          menu.textContent = "failed to load files";
+        });
+    };
+    browseBtn.addEventListener("click", () => {
+      if (menu.style.display === "none") showMenu();
+      else menu.style.display = "none";
+    });
+    box.appendChild(section("Image", row, menu));
   } else {
     const keysBox = document.createElement("div");
     keysBox.className = "chips";
@@ -410,15 +615,16 @@ function renderInsp() {
     });
 
     const input = inpText("", "KEY_H, A, or 35");
+    input.dataset.f = "key";
     const addBtn = document.createElement("button");
     addBtn.textContent = "add";
     const listenBtn = document.createElement("button");
     listenBtn.textContent = "listen";
     listenBtn.className = "listen-btn";
     addBtn.addEventListener("click", () => {
-      const v = input.value.trim();
-      if (!v) return;
-      cell.keys.push(v);
+      const v2 = input.value.trim();
+      if (!v2) return;
+      cell.keys.push(v2);
       input.value = "";
       saveCfg();
       renderInsp();
@@ -426,7 +632,7 @@ function renderInsp() {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") addBtn.click();
     });
-    listenBtn.addEventListener("click", () => send({ t: "cap", id: cell.id }));
+    listenBtn.addEventListener("click", () => send({ t: "cap", id: cell.id, ov: v.id }));
     const row = document.createElement("div");
     row.className = "row";
     row.appendChild(input);
@@ -443,10 +649,11 @@ function renderInsp() {
     box.appendChild(section("Counter", field("count and show the press counter", cb)));
 
     const lsz = numVal(cell.labelSize || 24);
+    lsz.dataset.f = "labelSize";
     lsz.addEventListener("change", () => {
-      const v = parseInt(lsz.value, 10);
-      if (v >= 8 && v <= 96) {
-        cell.labelSize = v;
+      const val = parseInt(lsz.value, 10);
+      if (val >= 8 && val <= 96) {
+        cell.labelSize = val;
         saveCfg();
         render();
       }
@@ -457,6 +664,7 @@ function renderInsp() {
   const appFields = [];
   if (cell.kind !== "image") {
     const fnt = selFont(cell.font);
+    fnt.dataset.f = "font";
     fnt.addEventListener("change", () => {
       cell.font = fnt.value;
       saveCfg();
@@ -465,29 +673,61 @@ function renderInsp() {
     appFields.push(field("font family of the label", fnt));
   }
   const scv = numVal(cell.scale || 1);
+  scv.dataset.f = "scale";
   scv.step = "0.25";
   scv.min = "0.25";
   scv.max = "4";
   scv.addEventListener("change", () => {
-    const v = parseFloat(scv.value);
-    if (!v || v < 0.25 || v > 4) {
+    const v3 = parseFloat(scv.value);
+    if (!v3 || v3 < 0.25 || v3 > 4) {
       scv.value = cell.scale || 1;
       return;
     }
-    cell.scale = v;
+    cell.scale = v3;
     saveCfg();
     render();
   });
   appFields.push(field("scale (zoom) of the cell", scv));
   box.appendChild(section("Appearance", ...appFields));
 
+  const mkColor = (key, txt) => {
+    const wrap = document.createElement("div");
+    wrap.className = "colorrow";
+    const i = document.createElement("input");
+    i.type = "color";
+    i.dataset.f = "col-" + key;
+    i.value = /^#[0-9a-fA-F]{6}$/.test(cell[key] || "") ? cell[key] : key === "onBg" ? "#1e78b4" : "#78d2ff";
+    i.addEventListener("input", () => {
+      cell[key] = i.value;
+      saveCfgDebounced();
+      render();
+    });
+    const clr = document.createElement("button");
+    clr.textContent = "×";
+    clr.title = "reset to default";
+    clr.addEventListener("click", () => {
+      delete cell[key];
+      i.value = key === "onBg" ? "#1e78b4" : "#78d2ff";
+      saveCfg();
+      render();
+    });
+    wrap.appendChild(i);
+    wrap.appendChild(clr);
+    return field(txt, wrap);
+  };
+
+  if (cell.kind !== "image") {
+    box.appendChild(section("Press color", mkColor("onBg", "pressed background"), mkColor("onBorder", "pressed border")));
+  }
+
   const mkNum = (key) => {
     const i = numVal(cell[key]);
+    i.dataset.f = "num-" + key;
     i.addEventListener("change", () => {
-      let v = parseInt(i.value, 10) || 0;
-      if (key === "w" || key === "h") v = Math.max(30, v);
-      if (key === "x" || key === "y") v = Math.max(0, v);
-      cell[key] = v;
+      let val = parseInt(i.value, 10) || 0;
+      if (key === "w" || key === "h") val = Math.max(30, val);
+      if (key === "x" || key === "y") val = Math.max(0, val);
+      cell[key] = val;
       saveCfg();
       render();
     });
@@ -501,7 +741,7 @@ function renderInsp() {
   r2.className = "row";
   r2.appendChild(mkNum("w"));
   r2.appendChild(mkNum("h"));
-  box.appendChild(section("Layout (px, canvas " + cfg.size.w + "x" + cfg.size.h + ")", r1, r2));
+  box.appendChild(section("Layout (px, canvas " + v.size.w + "x" + v.size.h + ")", r1, r2));
 
   const btnRow = document.createElement("div");
   btnRow.className = "row";
@@ -511,13 +751,14 @@ function renderInsp() {
   del.addEventListener("click", () => deleteCell(cell.id));
   const reset = document.createElement("button");
   reset.textContent = "Reset count";
-  reset.addEventListener("click", () => send({ t: "reset", id: cell.id }));
+  reset.addEventListener("click", () => send({ t: "reset", id: cell.id, ov: v.id }));
   btnRow.appendChild(del);
   btnRow.appendChild(reset);
   box.appendChild(btnRow);
 
   insp.innerHTML = "";
   insp.appendChild(box);
+  restoreSideFocus(prev);
 }
 
 connect();

@@ -58,10 +58,17 @@ func onHookEvent(nCode int, wParam, lParam uintptr) uintptr {
 		kbd := (*kbdLLHookStruct)(unsafe.Pointer(lParam))
 		down := wParam == wmKeyDown || wParam == wmSysKeyDown
 		code := kbd.ScanCode
-		if kbd.Flags&llkhfExtended != 0 {
+		ext := kbd.Flags&llkhfExtended != 0
+		if ext {
 			code |= 0x8000
 		}
-		if _, ok := scanNameByCode[code]; !ok && kbd.VKCode < 0x100 {
+		switch {
+		case kbd.VKCode >= 0x25 && kbd.VKCode <= 0x28:
+			// Arrows are extended keys, but some keyboards/software report
+			// them without the LLKHF_EXTENDED flag. Prefer the virtual-key
+			// code so Up/Left/Right/Down always resolve to KEY_UP etc.
+			code = 0x10000 | kbd.VKCode
+		case scanNameByCode[code] == "" && kbd.VKCode < 0x100:
 			code = 0x10000 | kbd.VKCode
 		}
 		onKey(code, down)
