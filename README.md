@@ -43,14 +43,26 @@ overlay bar at the top of the editor:
 - the text box renames the current overlay
 - `+ overlay` adds a new empty overlay, `copy` duplicates the current one,
   `delete` removes it
+- the URL field + `copy link` give you the OBS Browser Source URL for the
+  current overlay, so you never have to switch overlays in the page itself
 
 Every overlay has its own canvas size, cells and key bindings, and its own
 press counters.
 
-In OBS, each **Browser Source** can pin a specific overlay with `?ov=<name>`,
-e.g. `http://localhost:8090/?noedit=1&ov=celeste` or
-`http://localhost:8090/?noedit=1&ov=isaac`, so several sources can show
-different overlays at once. Without `?ov=` the active overlay is shown.
+In OBS, each **Browser Source** can pin a specific overlay, so several sources
+can show different overlays at once. The editor's overlay bar shows the URL for
+the current overlay and has a **copy link** button — use it to paste the URL
+into a Browser Source:
+
+- `http://localhost:8090/?isaac` — short form, just the overlay name
+- `http://localhost:8090/?t=Isaac` — same thing with an explicit parameter
+- `http://localhost:8090/?noedit=1&t=Isaac` — what the copy button produces
+
+The value is matched against the overlay **name** (ignoring case), its internal
+id, or its index. If it matches nothing the source shows an "overlay not found"
+notice instead of silently falling back, and it starts working by itself as
+soon as an overlay with that name exists. Without any parameter the active
+overlay is shown.
 
 in OBS add a **Browser Source** pointing at `http://localhost:8090/?noedit=1`
 (transparent, so your game/sources show through).

@@ -54,19 +54,37 @@ function ov() {
   return cfg.overlays[i];
 }
 
-function ovParam() {
-  const p = params.get("ov");
-  if (!p) return null;
-  const found = cfg.overlays.find((o) => o.id === p);
-  if (found) return found;
+function ovToken() {
+  const t = params.get("ov") || params.get("t");
+  if (t) return t;
+  for (const [k, v] of params) {
+    if (v === "" && k !== "edit" && k !== "noedit") return k;
+  }
+  return null;
+}
+
+function matchOverlay(p) {
+  if (!p || !cfg || !Array.isArray(cfg.overlays)) return null;
+  const want = String(p).trim().toLowerCase();
+  if (!want) return null;
+  const byId = cfg.overlays.find((o) => String(o.id).toLowerCase() === want);
+  if (byId) return byId;
+  const byName = cfg.overlays.find((o) => String(o.name || "").trim().toLowerCase() === want);
+  if (byName) return byName;
   const idx = parseInt(p, 10);
   if (!isNaN(idx) && idx >= 0 && idx < cfg.overlays.length) return cfg.overlays[idx];
   return null;
 }
 
+function ovParam() {
+  return matchOverlay(ovToken());
+}
+
 function viewedOverlay() {
   if (editing) return ov();
-  return ovParam() || ov();
+  const tok = ovToken();
+  if (tok) return matchOverlay(tok);
+  return ov();
 }
 
 function connect() {
@@ -171,11 +189,43 @@ function restoreSideFocus(s) {
   }
 }
 
+let lastRenderKey = null;
+
+function cellSig(c) {
+  return [
+    c.id, c.kind, c.label, c.labelSize, c.showCounter, c.image,
+    c.x, c.y, c.w, c.h, c.font, c.scale, c.onBg, c.onBorder,
+  ].join("\u0001");
+}
+
 function render() {
   const v = viewedOverlay();
-  if (!v) return;
+  if (!v) {
+    cells = [];
+    lastRenderKey = null;
+    wrap.innerHTML = "";
+    if (cfg && !editing) {
+      const tok = ovToken();
+      if (tok) {
+        const warn = document.createElement("div");
+        warn.className = "ovmissing";
+        warn.textContent = "overlay not found: " + tok;
+        wrap.appendChild(warn);
+      }
+    }
+    return;
+  }
   wrap.style.width = v.size.w + "px";
   wrap.style.height = v.size.h + "px";
+  const key = v.cells.map(cellSig).join("\u0002") + "\u0003" + (editing ? "e" : "v");
+  if (key === lastRenderKey) {
+    v.cells.forEach((c, i) => {
+      if (cells[i]) cells[i].classList.toggle("selected", c.id === sel);
+    });
+    applySt();
+    return;
+  }
+  lastRenderKey = key;
   wrap.innerHTML = "";
   cells = v.cells.map((cell) => buildCell(cell));
   for (const el of cells) wrap.appendChild(el);
@@ -400,6 +450,7 @@ function renderOvBar() {
   nameEl.title = "Overlay name";
   nameEl.addEventListener("input", () => {
     ov().name = nameEl.value;
+    if (linkEl) linkEl.value = ovUrl(ov());
     saveCfgDebounced();
   });
   nameEl.addEventListener("keydown", (e) => e.stopPropagation());
@@ -448,6 +499,38 @@ function renderOvBar() {
   box.appendChild(addBtn);
   box.appendChild(copyBtn);
   box.appendChild(delBtn);
+
+  const linkRow = document.createElement("div");
+  linkRow.className = "ovlink";
+  const linkEl = document.createElement("input");
+  linkEl.type = "text";
+  linkEl.className = "ovlinkurl";
+  linkEl.readOnly = true;
+  linkEl.title = "OBS Browser Source URL for this overlay";
+  linkEl.value = ovUrl(ov());
+  linkEl.addEventListener("focus", () => linkEl.select());
+  const linkBtn = document.createElement("button");
+  linkBtn.textContent = "copy link";
+  linkBtn.title = "Copy the OBS Browser Source URL for this overlay";
+  linkBtn.addEventListener("click", async () => {
+    const url = linkEl.value;
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("link copied");
+    } catch (e) {
+      linkEl.focus();
+      linkEl.select();
+      showToast("press Ctrl+C to copy");
+    }
+  });
+  linkRow.appendChild(linkEl);
+  linkRow.appendChild(linkBtn);
+  box.appendChild(linkRow);
+}
+
+function ovUrl(v) {
+  const name = (v && (v.name || v.id)) || "";
+  return location.origin + "/?noedit=1&t=" + encodeURIComponent(name);
 }
 
 function section(title, ...nodes) {

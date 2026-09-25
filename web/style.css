@@ -24,6 +24,22 @@ body {
   height: 206px;
 }
 
+.ovmissing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 13px/1.4 ui-monospace, monospace;
+  color: #ffb4b4;
+  background: rgba(60, 20, 20, 0.75);
+  border: 1px solid #8f5a5a;
+  border-radius: 6px;
+  text-align: center;
+  padding: 8px;
+  word-break: break-word;
+}
+
 .cell {
   position: absolute;
   box-sizing: border-box;
@@ -183,6 +199,24 @@ body {
 .ovbar input[type="text"] {
   flex: 1 1 120px;
   min-width: 90px;
+}
+
+.ovbar .ovlink {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 100%;
+  margin-top: 2px;
+}
+
+.ovbar .ovlink .ovlinkurl {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, monospace;
+  color: #9fd8a0;
+}
+
+.ovbar .ovlink button {
+  white-space: nowrap;
 }
 
 .snap {
