@@ -17,12 +17,15 @@ gear.addEventListener("click", () => {
 
 if (editing && !noedit) {
   document.getElementById("btnDone").addEventListener("click", () => {
+    flushSave();
     location.search = "";
   });
   document.getElementById("btnAddKey").addEventListener("click", () => addCell("key"));
   document.getElementById("btnAddImg").addEventListener("click", () => addCell("image"));
   document.getElementById("btnResetAll").addEventListener("click", () => send({ t: "resetall" }));
 }
+
+window.addEventListener("beforeunload", () => flushSave());
 
 let cfg = null;
 let st = null;
@@ -189,7 +192,17 @@ function restoreSideFocus(s) {
   }
 }
 
-let lastRenderKey = null;
+function liveCell(id) {
+  const v = viewedOverlay();
+  if (!v) return null;
+  return v.cells.find((c) => c.id === id) || null;
+}
+
+function inspCell() {
+  const v = ov();
+  if (!v || !sel) return null;
+  return v.cells.find((c) => c.id === sel) || null;
+}
 
 function cellSig(c) {
   return [
@@ -202,7 +215,6 @@ function render() {
   const v = viewedOverlay();
   if (!v) {
     cells = [];
-    lastRenderKey = null;
     wrap.innerHTML = "";
     if (cfg && !editing) {
       const tok = ovToken();
@@ -217,23 +229,17 @@ function render() {
   }
   wrap.style.width = v.size.w + "px";
   wrap.style.height = v.size.h + "px";
-  const key = v.cells.map(cellSig).join("\u0002") + "\u0003" + (editing ? "e" : "v");
-  if (key === lastRenderKey) {
-    v.cells.forEach((c, i) => {
-      if (cells[i]) cells[i].classList.toggle("selected", c.id === sel);
-    });
-    applySt();
-    return;
+  if (cells.length !== v.cells.length) {
+    wrap.innerHTML = "";
+    cells = v.cells.map((cell) => buildCell(cell));
+    for (const el of cells) wrap.appendChild(el);
+  } else {
+    v.cells.forEach((cell, i) => updateCell(cells[i], cell));
   }
-  lastRenderKey = key;
-  wrap.innerHTML = "";
-  cells = v.cells.map((cell) => buildCell(cell));
-  for (const el of cells) wrap.appendChild(el);
   applySt();
 }
 
-function buildCell(cell) {
-  const el = document.createElement("div");
+function applyCellStyle(el, cell) {
   const isImg = cell.kind === "image";
   el.className =
     "cell" +
@@ -245,32 +251,84 @@ function buildCell(cell) {
   el.style.width = cell.w + "px";
   el.style.height = cell.h + "px";
   if (cell.onBg) el.style.setProperty("--on-bg", cell.onBg);
+  else el.style.removeProperty("--on-bg");
   if (cell.onBorder) el.style.setProperty("--on-border", cell.onBorder);
+  else el.style.removeProperty("--on-border");
   if (cell.font) el.style.setProperty("--font", cell.font);
-  if (cell.scale && cell.scale !== 1) {
-    el.style.transform = "scale(" + cell.scale + ")";
-    el.style.transformOrigin = "0px 0px";
+  else el.style.removeProperty("--font");
+  el.style.transform = cell.scale && cell.scale !== 1 ? "scale(" + cell.scale + ")" : "";
+  el.style.transformOrigin = "0px 0px";
+}
+
+function cellContent(cell) {
+  if (cell.kind === "image") {
+    return `<img src="${esc(cell.image || "")}" alt="" draggable="false" />`;
   }
-  if (isImg) {
-    el.innerHTML = `<img src="${esc(cell.image || "")}" alt="" draggable="false" />`;
-  } else {
-    el.innerHTML = `<span class="lbl" style="font-size:${cell.labelSize || 24}px">${esc(cell.label)}</span><span class="cnt">0</span>`;
-  }
+  return `<span class="lbl" style="font-size:${cell.labelSize || 24}px">${esc(cell.label)}</span><span class="cnt">0</span>`;
+}
+
+function cacheCellParts(el) {
+  el._lbl = el.querySelector(".lbl");
+  el._cnt = el.querySelector(".cnt");
+  el._img = el.querySelector("img");
+}
+
+function attachEditBits(el) {
+  attachResize(el);
+  const del = document.createElement("button");
+  del.className = "xdel";
+  del.textContent = "×";
+  del.title = "Delete cell";
+  del.addEventListener("pointerdown", (e) => e.stopPropagation());
+  del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteCell(el._cid);
+  });
+  el.appendChild(del);
+}
+
+function buildCell(cell) {
+  const el = document.createElement("div");
+  el._cid = cell.id;
+  applyCellStyle(el, cell);
+  el.innerHTML = cellContent(cell);
+  cacheCellParts(el);
+  el._sig = cellSig(cell);
+  el._prev = cell;
   if (editing) {
-    attachDrag(el, cell);
-    attachResize(el, cell);
-    const del = document.createElement("button");
-    del.className = "xdel";
-    del.textContent = "×";
-    del.title = "Delete cell";
-    del.addEventListener("pointerdown", (e) => e.stopPropagation());
-    del.addEventListener("click", (e) => {
-      e.stopPropagation();
-      deleteCell(cell.id);
-    });
-    el.appendChild(del);
+    attachDrag(el);
+    attachEditBits(el);
   }
   return el;
+}
+
+function updateCell(el, cell) {
+  el._cid = cell.id;
+  const sig = cellSig(cell);
+  if (el._sig === sig) {
+    el.classList.toggle("selected", cell.id === sel);
+    return;
+  }
+  const prev = el._prev || {};
+  const wasImg = prev.kind === "image";
+  const nowImg = cell.kind === "image";
+  applyCellStyle(el, cell);
+  if (wasImg !== nowImg) {
+    el.innerHTML = cellContent(cell);
+    cacheCellParts(el);
+    if (editing) {
+      const oldRz = el.querySelector(".rz");
+      if (oldRz && oldRz.remove) oldRz.remove();
+      attachEditBits(el);
+    }
+  } else if (nowImg) {
+    if (prev.image !== cell.image && el._img) el._img.src = cell.image || "";
+  } else if (el._lbl) {
+    el._lbl.textContent = cell.label;
+    el._lbl.style.fontSize = (cell.labelSize || 24) + "px";
+  }
+  el._sig = sig;
+  el._prev = cell;
 }
 
 function saveCfg() {
@@ -280,7 +338,17 @@ function saveCfg() {
 
 function saveCfgDebounced() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveCfg, 350);
+  saveTimer = setTimeout(() => {
+    saveTimer = 0;
+    saveCfg();
+  }, 350);
+}
+
+function flushSave() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  saveCfg();
 }
 
 function select(id) {
@@ -299,58 +367,66 @@ function snapY(v, cell) {
   return 14 + Math.round((v - 14) / step) * step;
 }
 
-function attachDrag(el, cell) {
+function attachDrag(el) {
   el.addEventListener("pointerdown", (e) => {
     if (e.target.closest(".rz") || e.target.closest(".xdel") || e.button !== 0) return;
+    const c0 = liveCell(el._cid);
+    if (!c0) return;
     el.setPointerCapture(e.pointerId);
     const sx = e.clientX;
     const sy = e.clientY;
-    const ox = cell.x;
-    const oy = cell.y;
+    const ox = c0.x;
+    const oy = c0.y;
     let moved = false;
     const snapOn = document.getElementById("chkSnap") && document.getElementById("chkSnap").checked;
     const mv = (ev) => {
       if (Math.abs(ev.clientX - sx) > 3 || Math.abs(ev.clientY - sy) > 3) moved = true;
       if (!moved) return;
+      const c = liveCell(el._cid);
+      if (!c) return;
       let nx = ox + ev.clientX - sx;
       let ny = oy + ev.clientY - sy;
       if (snapOn) {
-        nx = snapX(nx, cell);
-        ny = snapY(ny, cell);
+        nx = snapX(nx, c);
+        ny = snapY(ny, c);
       }
-      cell.x = Math.max(0, nx);
-      cell.y = Math.max(0, ny);
-      el.style.left = cell.x + "px";
-      el.style.top = cell.y + "px";
+      c.x = Math.max(0, nx);
+      c.y = Math.max(0, ny);
+      el.style.left = c.x + "px";
+      el.style.top = c.y + "px";
     };
     const up = () => {
       document.removeEventListener("pointermove", mv);
       document.removeEventListener("pointerup", up);
       if (moved) saveCfg();
-      else select(cell.id);
+      else select(el._cid);
     };
     document.addEventListener("pointermove", mv);
     document.addEventListener("pointerup", up);
   });
 }
 
-function attachResize(el, cell) {
+function attachResize(el) {
   const rz = document.createElement("div");
   rz.className = "rz";
   el.appendChild(rz);
   rz.addEventListener("pointerdown", (e) => {
     e.stopPropagation();
     if (e.button !== 0) return;
+    const c0 = liveCell(el._cid);
+    if (!c0) return;
     rz.setPointerCapture(e.pointerId);
     const sx = e.clientX;
     const sy = e.clientY;
-    const ow = cell.w;
-    const oh = cell.h;
+    const ow = c0.w;
+    const oh = c0.h;
     const mv = (ev) => {
-      cell.w = Math.max(30, 10 * Math.round((ow + ev.clientX - sx) / 10));
-      cell.h = Math.max(30, 10 * Math.round((oh + ev.clientY - sy) / 10));
-      el.style.width = cell.w + "px";
-      el.style.height = cell.h + "px";
+      const c = liveCell(el._cid);
+      if (!c) return;
+      c.w = Math.max(30, 10 * Math.round((ow + ev.clientX - sx) / 10));
+      c.h = Math.max(30, 10 * Math.round((oh + ev.clientY - sy) / 10));
+      el.style.width = c.w + "px";
+      el.style.height = c.h + "px";
     };
     const up = () => {
       document.removeEventListener("pointermove", mv);
@@ -611,7 +687,9 @@ function renderInsp() {
   const nameField = inpText(cell.label, "dash");
   nameField.dataset.f = "label";
   nameField.addEventListener("input", () => {
-    cell.label = nameField.value;
+    const c = inspCell();
+    if (!c) return;
+    c.label = nameField.value;
     render();
     saveCfgDebounced();
   });
@@ -621,7 +699,9 @@ function renderInsp() {
     const imgField = inpText(cell.image, "media/image.png / anim.gif");
     imgField.dataset.f = "image";
     imgField.addEventListener("input", () => {
-      cell.image = imgField.value;
+      const c = inspCell();
+      if (!c) return;
+      c.image = imgField.value;
       render();
       saveCfgDebounced();
     });
@@ -659,8 +739,10 @@ function renderInsp() {
             nm.textContent = f;
             it.appendChild(nm);
             it.addEventListener("click", () => {
-              cell.image = "media/" + f;
-              imgField.value = cell.image;
+              const c = inspCell();
+              if (!c) return;
+              c.image = "media/" + f;
+              imgField.value = c.image;
               menu.style.display = "none";
               saveCfg();
               render();
@@ -689,7 +771,9 @@ function renderInsp() {
       x.textContent = "×";
       x.title = "unbind";
       x.addEventListener("click", () => {
-        cell.keys = cell.keys.filter((kk) => kk !== k);
+        const c = inspCell();
+        if (!c) return;
+        c.keys = c.keys.filter((kk) => kk !== k);
         saveCfg();
         renderInsp();
       });
@@ -706,8 +790,9 @@ function renderInsp() {
     listenBtn.className = "listen-btn";
     addBtn.addEventListener("click", () => {
       const v2 = input.value.trim();
-      if (!v2) return;
-      cell.keys.push(v2);
+      const c = inspCell();
+      if (!v2 || !c) return;
+      c.keys.push(v2);
       input.value = "";
       saveCfg();
       renderInsp();
@@ -715,7 +800,10 @@ function renderInsp() {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") addBtn.click();
     });
-    listenBtn.addEventListener("click", () => send({ t: "cap", id: cell.id, ov: v.id }));
+    listenBtn.addEventListener("click", () => {
+      const c = inspCell();
+      if (c) send({ t: "cap", id: c.id, ov: ov().id });
+    });
     const row = document.createElement("div");
     row.className = "row";
     row.appendChild(input);
@@ -725,7 +813,9 @@ function renderInsp() {
 
     const cb = chk(cell.showCounter);
     cb.addEventListener("change", () => {
-      cell.showCounter = cb.checked;
+      const c = inspCell();
+      if (!c) return;
+      c.showCounter = cb.checked;
       saveCfg();
       render();
     });
@@ -734,9 +824,10 @@ function renderInsp() {
     const lsz = numVal(cell.labelSize || 24);
     lsz.dataset.f = "labelSize";
     lsz.addEventListener("change", () => {
+      const c = inspCell();
       const val = parseInt(lsz.value, 10);
-      if (val >= 8 && val <= 96) {
-        cell.labelSize = val;
+      if (c && val >= 8 && val <= 96) {
+        c.labelSize = val;
         saveCfg();
         render();
       }
@@ -749,7 +840,9 @@ function renderInsp() {
     const fnt = selFont(cell.font);
     fnt.dataset.f = "font";
     fnt.addEventListener("change", () => {
-      cell.font = fnt.value;
+      const c = inspCell();
+      if (!c) return;
+      c.font = fnt.value;
       saveCfg();
       render();
     });
@@ -761,12 +854,14 @@ function renderInsp() {
   scv.min = "0.25";
   scv.max = "4";
   scv.addEventListener("change", () => {
+    const c = inspCell();
     const v3 = parseFloat(scv.value);
     if (!v3 || v3 < 0.25 || v3 > 4) {
-      scv.value = cell.scale || 1;
+      scv.value = (c && c.scale) || 1;
       return;
     }
-    cell.scale = v3;
+    if (!c) return;
+    c.scale = v3;
     saveCfg();
     render();
   });
@@ -781,7 +876,9 @@ function renderInsp() {
     i.dataset.f = "col-" + key;
     i.value = /^#[0-9a-fA-F]{6}$/.test(cell[key] || "") ? cell[key] : key === "onBg" ? "#1e78b4" : "#78d2ff";
     i.addEventListener("input", () => {
-      cell[key] = i.value;
+      const c = inspCell();
+      if (!c) return;
+      c[key] = i.value;
       saveCfgDebounced();
       render();
     });
@@ -789,7 +886,9 @@ function renderInsp() {
     clr.textContent = "×";
     clr.title = "reset to default";
     clr.addEventListener("click", () => {
-      delete cell[key];
+      const c = inspCell();
+      if (!c) return;
+      delete c[key];
       i.value = key === "onBg" ? "#1e78b4" : "#78d2ff";
       saveCfg();
       render();
@@ -807,10 +906,12 @@ function renderInsp() {
     const i = numVal(cell[key]);
     i.dataset.f = "num-" + key;
     i.addEventListener("change", () => {
+      const c = inspCell();
+      if (!c) return;
       let val = parseInt(i.value, 10) || 0;
       if (key === "w" || key === "h") val = Math.max(30, val);
       if (key === "x" || key === "y") val = Math.max(0, val);
-      cell[key] = val;
+      c[key] = val;
       saveCfg();
       render();
     });
@@ -831,10 +932,15 @@ function renderInsp() {
   const del = document.createElement("button");
   del.textContent = "Delete cell";
   del.style.borderColor = "#8f5a5a";
-  del.addEventListener("click", () => deleteCell(cell.id));
+  del.addEventListener("click", () => {
+    if (sel) deleteCell(sel);
+  });
   const reset = document.createElement("button");
   reset.textContent = "Reset count";
-  reset.addEventListener("click", () => send({ t: "reset", id: cell.id, ov: v.id }));
+  reset.addEventListener("click", () => {
+    const c = inspCell();
+    if (c) send({ t: "reset", id: c.id, ov: ov().id });
+  });
   btnRow.appendChild(del);
   btnRow.appendChild(reset);
   box.appendChild(btnRow);
